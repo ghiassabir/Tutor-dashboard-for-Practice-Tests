@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tutor Diagnostic Dashboard</title>
+    <style>
+        /* General Styling */
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            background-color: #f4f7f6;
+            max-width: 1200px; 
+            margin: 20px auto; 
+            padding: 0 20px;
+        }
+        /* Header Styling */
+        header { text-align: center; margin-bottom: 2rem; }
+        header h1 { color: #2a5266; }
+
+        /* KPI Card Styling */
+        #kpi-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 2rem;
+        }
+        .kpi-card {
+            background-color: #ffffff;
+            border: 1px solid #e0e0e0;
+            border-left: 5px solid #2a5266;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .kpi-card .title { font-size: 1rem; color: #6c757d; margin-bottom: 0.5rem; }
+        .kpi-card .value { font-size: 2rem; font-weight: bold; color: #2a5266; }
+
+        /* Table and Section Styling */
+        .results-section {
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            overflow: hidden;
+            margin-bottom: 2rem;
+        }
+        .results-header {
+            padding: 1rem 1.5rem;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #ddd;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #333;
+        }
+        .table-wrapper { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 1rem 1.5rem; text-align: left; border-bottom: 1px solid #ddd; white-space: nowrap; }
+        th { background-color: #f8f9fa; font-weight: bold; }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:nth-child(even) { background-color: #f8f9fa; }
+        tbody tr:hover { background-color: #e0e7ff; }
+        .loader { text-align: center; padding: 2rem; font-size: 1.2rem; color: #6c757d; }
+        
+        /* "Most Wrong" Question Styling */
+        #wrong-questions-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            padding: 1.5rem;
+        }
+        .wrong-questions-module {
+            background-color: #fafafa;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+            overflow: hidden;
+        }
+        .wrong-questions-module ol { list-style-type: none; padding: 0; margin: 0; }
+        .wrong-questions-module li {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #eee;
+        }
+        .wrong-questions-module li:last-child { border-bottom: none; }
+        .wrong-count { font-weight: bold; color: #bb2d3b; }
+
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Diagnostic Test - Tutor Dashboard</h1>
+    </header>
+
+    <main>
+        <section id="kpi-container"></section>
+
+        <section id="student-results-section" class="results-section" style="display:none;">
+            <div class="results-header">Student Scores</div>
+            <div class="table-wrapper">
+                <table id="results-table">
+                    <thead>
+                        <tr>
+                            <th>Student Email</th>
+                            <th>English (Scaled)</th>
+                            <th>Math (Scaled)</th>
+                            <th>Total (Scaled)</th>
+                            <th>English (Raw)</th>
+                            <th>Math (Raw)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- New Section for "Most Wrong" Questions -->
+        <section id="class-analysis-section" class="results-section" style="display:none;">
+            <div class="results-header">Class-Wide "Most Wrong" Questions</div>
+            <div id="wrong-questions-container"></div>
+        </section>
+
+        <div id="loader" class="loader"><p>Loading class data...</p></div>
+
+    </main>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+
+        // --- CONFIGURATION ---
+        const SUBMISSIONS_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSxW6lYLIfH1r9954znKNbcE90y5qit38yhhyhZnTv_pMCM46H6DdFzQ5ekkJbqtAwfwVBbNegOVzmU/pub?gid=0&single=true&output=csv';
+        const SCORING_TABLE_URL = 'https://raw.githubusercontent.com/ghiassabir/Student-dashboard-with-real-data-v1/refs/heads/Diagnostic-Dashboard/scoring/Raw_to_Scaled_Conversion_table_RW.json';
+        const TARGET_TEST_NUMBER = 0; 
+
+        const MODULES = {
+            "DT-T0-RW-M1": { name: "English Module 1", type: "RW", total: 27 },
+            "DT-T0-RW-M2": { name: "English Module 2", type: "RW", total: 27 },
+            "DT-T0-MT-M1": { name: "Math Module 1", type: "Math", total: 22 },
+            "DT-T0-MT-M2": { name: "Math Module 2", type: "Math", total: 22 },
+        };
+
+        // --- HELPER FUNCTIONS ---
+        function parseCSV(text) {
+            let lines = text.trim().split('\n');
+            const headers = lines[0].split(',').map(h => h.trim());
+            const result = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i]) continue;
+                const obj = {};
+                let values = [];
+                let current_value = '';
+                let in_quotes = false;
+                for (const char of lines[i]) {
+                    if (char === '"' && in_quotes) in_quotes = false;
+                    else if (char === '"' && !in_quotes) in_quotes = true;
+                    else if (char === ',' && !in_quotes) {
+                        values.push(current_value.trim());
+                        current_value = '';
+                    } else {
+                        current_value += char;
+                    }
+                }
+                values.push(current_value.trim());
+                for (let j = 0; j < headers.length; j++) {
+                    let value = values[j] || '';
+                    if (value.startsWith('"') && value.endsWith('"')) value = value.substring(1, value.length - 1);
+                    obj[headers[j]] = value;
+                }
+                result.push(obj);
+            }
+            return result;
+        }
+
+        function processScoringData(scoringArray) {
+            const lookupTables = { RW: {}, Math: {} };
+            const rawScoreKey = "Raw Score (# of Correct Answers)";
+            const rwScaledScoreKey = `Test ${TARGET_TEST_NUMBER} RW Upper`;
+            const mathScaledScoreKey = `Test ${TARGET_TEST_NUMBER} Math Upper`;
+
+            scoringArray.forEach(row => {
+                const rawScore = row[rawScoreKey];
+                if (row[rwScaledScoreKey] !== undefined) lookupTables.RW[rawScore] = row[rwScaledScoreKey];
+                else if (row[mathScaledScoreKey] !== undefined) lookupTables.Math[rawScore] = row[mathScaledScoreKey];
+            });
+            return lookupTables;
+        }
+
+        const getScaledScore = (rawScore, subject, lookupMap) => {
+            const table = subject === 'RW' ? lookupMap.RW : lookupMap.Math;
+            return table[rawScore] || 200;
+        };
+
+
+        // --- MAIN LOGIC ---
+        try {
+            const [submissionsRes, scoringRes] = await Promise.all([
+                fetch(SUBMISSIONS_CSV_URL),
+                fetch(SCORING_TABLE_URL)
+            ]);
+
+            if (!submissionsRes.ok) throw new Error(`Failed to fetch submissions. Status: ${submissionsRes.status}`);
+            if (!scoringRes.ok) throw new Error(`Failed to fetch scoring table. Status: ${scoringRes.status}`);
+            
+            const csvText = await submissionsRes.text();
+            const scoringArray = await scoringRes.json();
+            
+            const scoringTable = processScoringData(scoringArray);
+            const allSubmissions = parseCSV(csvText);
+
+            const uniqueSubmissionsMap = new Map();
+            allSubmissions.forEach(row => {
+                const key = `${row.student_gmail_id}|${row.question_id}`;
+                uniqueSubmissionsMap.set(key, row);
+            });
+            const deDuplicatedSubmissions = Array.from(uniqueSubmissionsMap.values());
+
+            const studentRawScores = {};
+            const questionStats = {};
+
+            deDuplicatedSubmissions.forEach(row => {
+                const email = row.student_gmail_id;
+                const quizName = row.quiz_name;
+                const questionId = row.question_id;
+                const isCorrect = row.is_correct === 'TRUE';
+
+                if (!email || !quizName || !MODULES[quizName] || !questionId) return;
+
+                if (!studentRawScores[email]) {
+                    studentRawScores[email] = { RW: 0, Math: 0 };
+                }
+
+                if (isCorrect) {
+                    const subject = MODULES[quizName].type;
+                    studentRawScores[email][subject]++;
+                }
+                
+                if (!questionStats[questionId]) {
+                    questionStats[questionId] = { wrong: 0, moduleName: MODULES[quizName].name };
+                }
+                if (!isCorrect) {
+                    questionStats[questionId].wrong++;
+                }
+            });
+            
+            const studentResults = Object.keys(studentRawScores).map(email => {
+                const raw = studentRawScores[email];
+                const scaledRw = getScaledScore(raw.RW, 'RW', scoringTable);
+                const scaledMath = getScaledScore(raw.Math, 'Math', scoringTable);
+                
+                return {
+                    email,
+                    raw_rw: raw.RW,
+                    raw_math: raw.Math,
+                    scaled_rw: scaledRw,
+                    scaled_math: scaledMath,
+                    total_scaled: scaledRw + scaledMath
+                };
+            });
+
+            const totalStudents = studentResults.length;
+            const avgRwScaled = Math.round(studentResults.reduce((sum, s) => sum + s.scaled_rw, 0) / totalStudents);
+            const avgMathScaled = Math.round(studentResults.reduce((sum, s) => sum + s.scaled_math, 0) / totalStudents);
+            const avgTotalScaled = Math.round(studentResults.reduce((sum, s) => sum + s.total_scaled, 0) / totalStudents);
+            
+            // Analyze and Sort "Most Wrong" Questions
+            const wrongQuestionsByModule = {};
+            for (const qId in questionStats) {
+                const stat = questionStats[qId];
+                if (!wrongQuestionsByModule[stat.moduleName]) {
+                    wrongQuestionsByModule[stat.moduleName] = [];
+                }
+                wrongQuestionsByModule[stat.moduleName].push({
+                    id: qId.split('-').pop(), // Extracts 'Q1', 'Q2', etc.
+                    wrongCount: stat.wrong
+                });
+            }
+            for(const moduleName in wrongQuestionsByModule) {
+                wrongQuestionsByModule[moduleName].sort((a,b) => b.wrongCount - a.wrongCount);
+            }
+
+            // Render Page
+            renderKPIs(totalStudents, avgRwScaled, avgMathScaled, avgTotalScaled);
+            renderStudentTable(studentResults);
+            renderWrongQuestions(wrongQuestionsByModule);
+
+            document.getElementById('loader').style.display = 'none';
+            document.getElementById('student-results-section').style.display = 'block';
+            document.getElementById('class-analysis-section').style.display = 'block';
+
+        } catch (error) {
+            console.error("Error loading or processing data:", error);
+            document.getElementById('loader').innerHTML = `<p style="color:red;">Error: ${error.message}</p>`;
+        }
+        
+        // --- RENDER FUNCTIONS ---
+        function renderKPIs(total, rw, math, totalAvg) {
+            const container = document.getElementById('kpi-container');
+            container.innerHTML = `
+                <div class="kpi-card"><div class="title">Total Students</div><div class="value">${total}</div></div>
+                <div class="kpi-card"><div class="title">Avg. English Scaled</div><div class="value">${rw}</div></div>
+                <div class="kpi-card"><div class="title">Avg. Math Scaled</div><div class="value">${math}</div></div>
+                <div class="kpi-card"><div class="title">Avg. Total Scaled</div><div class="value">${totalAvg}</div></div>
+            `;
+        }
+
+        function renderStudentTable(data) {
+            const tableBody = document.getElementById('results-body');
+            tableBody.innerHTML = '';
+            data.sort((a,b) => b.total_scaled - a.total_scaled);
+            data.forEach(student => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${student.email}</td>
+                    <td>${student.scaled_rw}</td>
+                    <td>${student.scaled_math}</td>
+                    <td><b>${student.total_scaled}</b></td>
+                    <td>${student.raw_rw} / 54</td>
+                    <td>${student.raw_math} / 44</td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+
+        function renderWrongQuestions(data) {
+            const container = document.getElementById('wrong-questions-container');
+            container.innerHTML = '';
+            const moduleOrder = ["English Module 1", "English Module 2", "Math Module 1", "Math Module 2"];
+            moduleOrder.forEach(moduleName => {
+                if (data[moduleName]) {
+                    const moduleDiv = document.createElement('div');
+                    moduleDiv.className = 'wrong-questions-module';
+                    let listHtml = `<div class="results-header">${moduleName}</div><ol>`;
+                    data[moduleName].slice(0, 10).forEach(q => { // Show top 10
+                        listHtml += `<li><span>${q.id}</span> <span class="wrong-count">${q.wrongCount} students</span></li>`;
+                    });
+                    listHtml += '</ol>';
+                    moduleDiv.innerHTML = listHtml;
+                    container.appendChild(moduleDiv);
+                }
+            });
+        }
+    });
+    </script>
+</body>
+</html>
